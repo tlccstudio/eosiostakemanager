@@ -1,30 +1,601 @@
 <!DOCTYPE html>
 <html>
 <head>
-<!-- Stake Manager - Built for EOSIO Chains - index.html -->
-<!--  version 0.95a -->
-<meta charset="utf-8" />
 
-<!-- BOOTSTRAP 4.5.2 -->
-<link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css'>
+    <!-- Stake Manager - Built for EOSIO Chains - index.html -->
+    <!--  version 0.95a -->
+    <meta charset="utf-8" />
 
-<script src='https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.0/umd/popper.min.js'></script>
-<script src='https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js'></script>
     
-<!-- JQUERY -->
-<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.gstatic.com">
+    <link href="https://fonts.googleapis.com/css2?family=Overpass:wght@700&display=swap" rel="stylesheet"> 
 
-<script type="text/javascript">
+    <!-- JQUERY -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
 
-$( document ).ready(function() {
+    <!-- BOOTSTRAP 4.5.2 -->
+    <link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css'>
+
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.0/umd/popper.min.js'></script>
+    <script src='https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js'></script>
     
-
-});
-
-</script>
+    <!-- EOSJS -->
+    <script src='./dist-web/eosjs-api.min.js'></script>
+    <script src='./dist-web/eosjs-jsonrpc.min.js'></script>
+    <script src='./dist-web/eosjs-jssig.min.js'></script>
+    
+     <!-- JS Includes -->
+    <script src='js/basic.js'></script>
+    
+    <!-- Telos API Functions -->
+    <script src='js/telosAPI_MIT.js'></script>
+    
+    <script type="text/javascript">
+    
+        var aAccounts = [];
+        var aAccountsAdj = [];
+        var nBatchCount = 0;
+        
+        var apiExecute = false;
+        
+        function fError(e)
+        {
+            console.log("ERROR Callback:");
+            console.log(e);
+        }
+        
+        function fSuccess(ret)
+        {
+            nBatchCount = nBatchCount + 1;
+            console.log("Find record batch count: " + nBatchCount);
+            console.log(ret);
+            
+            if(ret.status === "success") {
+                aAccounts = aAccounts.concat(ret.data.rows);
+                
+                if(ret.data.more == true){
+                    var lower = ret.data.next_key;
+                    setTimeout(function() { tlos_get_table_rows("eosio", -1, $("#staking_acct").val(), "delband", "", lower, fSuccess, fError); }, 100);
+                } else {
+                    $("#json_data_fetch").val(JSON.stringify(aAccounts));
+                    $("#records_loaded").html(aAccounts.length);
+                    delCalc();
+                }
+            }
+        }
+        
+        function delCalc() {
+            
+            var del_CPU = 0;
+            var del_NET = 0;
+            
+            for(i=0; i < aAccounts.length; i++) {
+                del_CPU = del_CPU + parseFloat(aAccounts[i].cpu_weight.split(" ")[0]);
+                del_NET = del_NET + parseFloat(aAccounts[i].net_weight.split(" ")[0]);
+            }
+            
+            $("#records_cpu").html(_tlcur(Math.abs(del_CPU), "TLOS"));
+            $("#records_net").html(_tlcur(Math.abs(del_NET), "TLOS"));
+        }
+        
+        function adjCalc() {
+            
+            var setCPU = parseFloat(parseInt($('#set_cpu').val()) / 10000);
+            var setNET = parseFloat(parseInt($('#set_net').val()) / 10000);
+            var del_CPU = 0;
+            var del_NET = 0;
+            var cur_CPU_adj = 0;
+            var cur_NET_adj = 0;
+            var net_CPU_adj = 0;
+            var net_NET_adj = 0;
+            
+            var signer = $('#staking_acct').val();
+            
+            aAccountsAdj = []; //build out array of actions
+            
+            for(i=0; i < aAccounts.length; i++) {
+                del_CPU = parseFloat(aAccounts[i].cpu_weight.split(" ")[0]);
+                del_NET = parseFloat(aAccounts[i].net_weight.split(" ")[0]);
+                
+                cur_CPU_adj = setCPU - del_CPU;
+                cur_NET_adj = setNET - del_NET;
+                
+                cur_CPU_adj = Math.round(cur_CPU_adj * 10000) / 10000;
+                cur_NET_adj = Math.round(cur_NET_adj * 10000) / 10000;
+                
+                net_CPU_adj = net_CPU_adj + cur_CPU_adj;
+                net_NET_adj = net_NET_adj + cur_NET_adj;
+                
+                //build a single undelegatebw or delegatebw
+                if((cur_CPU_adj < 0) && (cur_NET_adj < 0)) {
+                    aAccountsAdj.push(tlos_create_general_action(
+                        "eosio",
+                        "undelegatebw",
+                        signer,
+                        $('#sign_perm').val(),
+                        {   from: signer,
+                            receiver: aAccounts[i].to,
+                            unstake_net_quantity: _tlcur(Math.abs(cur_NET_adj), "TLOS"),
+                            unstake_cpu_quantity: _tlcur(Math.abs(cur_CPU_adj), "TLOS") }
+                        ));
+                } else if((cur_CPU_adj > 0) && (cur_NET_adj > 0)) {
+                    aAccountsAdj.push(tlos_create_general_action(
+                        "eosio",
+                        "delegatebw",
+                        signer,
+                        $('#sign_perm').val(),
+                        {   from: signer,
+                            receiver: aAccounts[i].to,
+                            stake_net_quantity: _tlcur(Math.abs(cur_NET_adj), "TLOS"),
+                            stake_cpu_quantity: _tlcur(Math.abs(cur_CPU_adj), "TLOS"),
+                            transfer: false }
+                        ));
+                } else if ((cur_CPU_adj == 0) && (cur_NET_adj == 0)) {
+                    // no adjustment needed, skip
+                }
+                else {
+                    //mixed adjustments needed on this account, requires multiple actions
+                    if(cur_CPU_adj < 0) {
+                        aAccountsAdj.push(tlos_create_general_action(
+                        "eosio",
+                        "undelegatebw",
+                        signer,
+                        $('#sign_perm').val(),
+                        {   from: signer,
+                            receiver: aAccounts[i].to,
+                            unstake_net_quantity: _tlcur(Math.abs(0), "TLOS"),
+                            unstake_cpu_quantity: _tlcur(Math.abs(cur_CPU_adj), "TLOS") }
+                        ));
+                    }
+                    if(cur_CPU_adj > 0) {
+                        aAccountsAdj.push(tlos_create_general_action(
+                        "eosio",
+                        "delegatebw",
+                        signer,
+                        $('#sign_perm').val(),
+                        {   from: signer,
+                            receiver: aAccounts[i].to,
+                            stake_net_quantity: _tlcur(Math.abs(0), "TLOS"),
+                            stake_cpu_quantity: _tlcur(Math.abs(cur_CPU_adj), "TLOS"),
+                            transfer: false }
+                        ));
+                    }
+                    if(cur_NET_adj < 0) {
+                        aAccountsAdj.push(tlos_create_general_action(
+                        "eosio",
+                        "undelegatebw",
+                        signer,
+                        $('#sign_perm').val(),
+                        {   from: signer,
+                            receiver: aAccounts[i].to,
+                            unstake_net_quantity: _tlcur(Math.abs(cur_NET_adj), "TLOS"),
+                            unstake_cpu_quantity: _tlcur(Math.abs(0), "TLOS") }
+                        ));
+                    }
+                    if(cur_NET_adj > 0) {
+                        aAccountsAdj.push(tlos_create_general_action(
+                        "eosio",
+                        "delegatebw",
+                        signer,
+                        $('#sign_perm').val(),
+                        {   from: signer,
+                            receiver: aAccounts[i].to,
+                            stake_net_quantity: _tlcur(Math.abs(cur_NET_adj), "TLOS"),
+                            stake_cpu_quantity: _tlcur(Math.abs(0), "TLOS"),
+                            transfer: false }
+                        ));
+                    }
+                }
+            }
+            
+            var sCPUSign = net_CPU_adj < 0 ? "" : "-";
+            var sNETSign = net_NET_adj < 0 ? "" : "-";
+            
+            $('#free_cpu_calc').html(sCPUSign + _tlcur(Math.abs(net_CPU_adj), "TLOS"));
+            
+            if(net_CPU_adj >= 0) {
+                $('#free_cpu_calc').css("color","#e61c1c");
+            } else {
+                $('#free_cpu_calc').css("color","#28a745");
+            }
+            
+            $('#free_net_calc').html(sNETSign + _tlcur(Math.abs(net_NET_adj), "TLOS"));
+       
+            if(net_NET_adj >= 0) {
+                $('#free_net_calc').css("color","#e61c1c");
+            } else {
+                $('#free_net_calc').css("color","#28a745");
+            }
+        }
+        
+        var gIndex = 0;
+        var gBatchQty = 0;
+        
+        function processCallbackA (ret) {
+            /*gIndex = gIndex + gBatchQty;
+            
+            if(apiExecute) {
+                setTimeout(function(){ processActions(gIndex, gBatchQty); }, 5);
+            }*/
+        }
+        
+        function processCallbackB (ret) {
+            gIndex = gIndex + gBatchQty;
+            
+            if(apiExecute) {
+                setTimeout(function(){ processActions(gIndex, gBatchQty); }, 5);
+            }
+        }
+        
+        //set inside of preProcessActions()
+        var pActionsA = [];
+        var pActionsB = [];
+        var pkey = null;
+        var rpc = null;
+        var signatureProvider = null;
+        var api = null;
+        
+        function preProcessActions() {
+            pActionsA = [];
+            pActionsB = [];
+            pkey = cleanPrivateKeyText($('#sign_key').val());
+            rpc = new eosjs_jsonrpc.JsonRpc(telosAPIURL_transact);
+            signatureProvider = new eosjs_jssig.JsSignatureProvider([pkey]);
+            api = new eosjs_api.Api({ rpc, signatureProvider });
+        }
+        
+        function processActions(nIndex, batchQty) {
+            gIndex = nIndex;
+            gBatchQty = batchQty;
+            
+            pActionsA = [];
+            pActionsB = [];
+  
+            for(i = nIndex; (i < aAccountsAdj.length) && (i < (nIndex + batchQty)); i++) {
+                
+                pActionsA.push(aAccountsAdj[i]);
+            }
+            
+            try {  //send the transaction
+                tlos_sign_actions(pkey, pActionsA, processCallbackA);
+        
+            } catch(err){
+                console.log('Posting Error - code #E921');
+                //error
+                console.log(err);
+                alert(err);
+                
+                apiExecute = false;
+                console.log("ADJUSTMENTS STOPPED!");
+                
+                return;
+            }
+            
+            gIndex = gIndex + gBatchQty;
+            
+            for(i = gIndex; (i < aAccountsAdj.length) && (i < (gIndex + batchQty)); i++) {
+                
+                pActionsB.push(aAccountsAdj[i]);
+            }
+            
+            try {  //send the transaction
+                tlos_sign_actions(pkey, pActionsB, processCallbackB);
+        
+            } catch(err){
+                console.log('Posting Error - code #E922');
+                //error
+                console.log(err);
+                alert(err);
+                
+                apiExecute = false;
+                console.log("ADJUSTMENTS STOPPED!");
+                
+                return;
+            }
+        }
+    
+        $( document ).ready(function() {
+            
+             $("#api").change(function () {
+                var url = $('#api').val();
+                
+                updateAPIServer(url);
+            });
+            
+            $('#btn_fetch').click(function() {
+                aAccounts = [];
+                
+                $("#json_data_fetch").val('');
+                
+                tlos_get_table_rows("eosio", -1, $("#staking_acct").val(), "delband", "", "", fSuccess, fError);
+                
+            });
+            
+            $('#btn_load_json').click(function() {
+                aAccounts = [];
+                
+                aAccounts = JSON.parse($("#json_data_fetch").val());
+                
+                $("#records_loaded").html(aAccounts.length);
+                
+                delCalc();
+            });
+            
+            $('#btn_calculate').click(function() {
+                adjCalc();
+                var lActions = aAccountsAdj.length;
+                $('#actions_loaded').html(lActions);
+                $('#sign_act').val($('#staking_acct').val());
+            });
+            
+            $('#btn_issue_adjust').click(function() {
+                
+                var nBatch = parseInt($('#n_batch_qty').val());
+                
+                if(apiExecute == false) {
+                    apiExecute = true;
+                    preProcessActions();
+                    setTimeout(function() { processActions(0, nBatch); }, 100);
+                }
+            });
+            
+            $('#btn_stop_adjust').click(function() {
+                
+                console.log(aAccountsAdj);
+                
+                apiExecute = false;
+            });
+        });
+    </script>
 
 </head>
-<body>
-HELLO!
+<body style="font-family: Overpass;">
+
+    <div class="jumbotron text-center" style="background-color: #50485b; color: #fafafa; background-image: url('./img/gradient_v2.jpg');">
+        <h1 style="margin: 15px;"><img src="img/telos.png" width="42" style="display: inline; margin-top: -10px;"/> telos</h1>
+        <h2>CPU / NET Stake Manager</h2>
+        <p style="max-width: 400px; margin: auto; margin-bottom: 20px;">Signs and submits bulk delegations directly from your browser using <a href="https://github.com/EOSIO/eosjs" target="_blank" style="color: #a6fffe;">eosjs</a>.</p>
+        <center><p style="font-size: 12px; font-family: Tahoma; margin-top: -10px; margin-bottom: 35px;">
+        <a href="https://github.com/tlccstudio/eosiostakemanager" target="_blank" style="color: #a6fffe;">Project GitHub</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+        <a href="https://defi.tlccc.sg" target="_blank" style="color: #a6fffe;">defi.tlccc.sg</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+        <a href="https://telos.net/" target="_blank" style="color: #a6fffe;">Telos.net</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+        <a href="https://github.com/telosnetwork" target="_blank" style="color: #a6fffe;">Telos Network Github</a>
+        </p></center>
+        <div class='row' id='row_api'>
+            <div class='form-group col-sm-3'>
+            </div>
+            <div class='form-group col-sm-2'>
+                <label for="api" style="margin-top: 8px;">API Server:</label>
+            </div>
+            <div class='form-group col-sm-4'>
+                <select name="api" id="api" style="width: 260px;">
+                    <option value="https://telos.caleos.io">https://telos.caleos.io</option>
+                    <option value="https://api.telosunlimited.io">https://api.telosunlimited.io</option>
+                    <option value="http://testnet.teloslogs.caleos.io">http://testnet.teloslogs.caleos.io</option>
+                </select> 
+            </div>
+            <div class='form-group col-sm-1'>
+                <div class="form-check" hidden>
+                    <label class="form-check-label">
+                    <input type="checkbox" class="form-check-input" value="">POST?
+                    </label>
+                </div>
+            </div>
+            <div class='form-group col-sm-2'>
+            </div>
+        </div>
+    </div>
+
+    <div class="container" style="width: 100%;">
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class="col-sm-8">
+                <h2>JSON Data Retrieval</h2>
+            </div>
+            <div class="col-sm-2">
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class='form-group col-sm-2'>
+                <label for="staking_acct" style="margin-top: 8px;">Staking Account:</label>
+            </div>
+            <div class='form-group col-sm-4'>
+                <input type="text" class="form-control" id="staking_acct" value="">
+            </div>
+            <div class='form-group col-sm-1'>
+                <button type="button" class="btn btn-primary" id="btn_fetch">Fetch</button>
+            </div>
+            <div class='form-group col-sm-3'>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class="form-group col-sm-8">
+                <label for="json_data_fetch">Fetch JSON Data:</label>
+                <textarea class="form-control" rows="5" id="json_data_fetch"> </textarea>
+            </div> 
+            <div class="col-sm-2">
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class="form-group col-sm-4">
+            <button style='display: inline;' class='btn btn-primary' onClick='document.getElementById("json_data_fetch").select(); document.execCommand("copy");'>copy</button>
+            </div>
+            <div class="form-group col-sm-4">
+            <button style='display: inline;' class='btn btn-primary' id='btn_load_json'>load json</button>
+            </div>  
+            <div class="col-sm-2">
+            </div>
+        </div>
+    </div>
+    
+    <div class="container" style="width: 100%;">
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class="col-sm-8">
+                <hr>
+                <h2>Calculate Adjustments</h2>
+            </div>
+            <div class="col-sm-2">
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class="col-sm-3">
+            <p>Records Loaded: <span id="records_loaded" style="color: #22aa22;">0</span></p>
+            </div>
+            <div class="col-sm-3">
+            <p>Del. CPU: <span id="records_cpu" style="color: #007bff;">0.0000 TLOS</span></p>
+            </div>
+            <div class="col-sm-3">
+            <p>Del. NET: <span id="records_net" style="color: #007bff;">0.0000 TLOS</span></p>
+            </div>
+            <div class="col-sm-1">
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class="col-sm-8">
+            <p>For Set CPU and Set NET avoid decimals, just use round figures like 3000, which equals 0.3000 TLOS</p>
+            </div>
+            <div class="col-sm-2">
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class='form-group col-sm-2'>
+                <label for="set_cpu" style="margin-top: 8px;">Set CPU (TLOS):</label>
+            </div>
+            <div class='form-group col-sm-2'>
+                <input type="number" class="form-control" id="set_cpu" value="2000">
+            </div>
+            <div class='form-group col-sm-2'>
+                <label for="set_net" style="margin-top: 8px;">Set NET (TLOS):</label>
+            </div>
+            <div class='form-group col-sm-2'>
+                <input type="number" class="form-control" id="set_net" value="1000">
+            </div>
+            <div class="col-sm-2">
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class='form-group col-sm-2'>
+                <label for="sign_perm" style="margin-top: 8px;">Permission:</label>
+            </div>
+            <div class='form-group col-sm-4'>
+                <input type="text" class="form-control" id="sign_perm" value="active"  autocomplete="off">
+            </div>
+            <div class='form-group col-sm-4'>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class='form-group col-sm-2'>
+                <button style='display: inline;' class='btn btn-success' id='btn_calculate'>Calculate</button>
+            </div>
+            <div class='form-group col-sm-3'>
+                <h5 style="margin-top: 12px;">Free CPU:  <span id="free_cpu_calc" style="color: #28a745;">0.0000 TLOS</span></h5>
+            </div>
+            <div class='form-group col-sm-3'>
+                <h5 style="margin-top: 12px;">Free NET:  <span id="free_net_calc" style="color: #28a745;">0.0000 TLOS</span></h5>
+            </div>
+            <div class='form-group col-sm-2'>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class='form-group col-sm-8'>
+               <hr>
+               <h2>Issue Adjustments</h2>
+                <p>Actions to Issue: <span id="actions_loaded" style="color: #dc3545;">0</span></p>
+            </div>
+            <div class='form-group col-sm-2'>
+            </div>
+        </div>
+        
+         <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class='form-group col-sm-4'>
+                <label for="sign_act" style="margin-top: 8px;">Action Batch Qty:</label>
+            </div>
+            <div class='form-group col-sm-2'>
+                <input type="number" class="form-control" id="n_batch_qty" autocomplete="off" value="15">
+            </div>
+            <div class='form-group col-sm-4'>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class='form-group col-sm-2'>
+                <label for="sign_act" style="margin-top: 8px;">Signer Acct:</label>
+            </div>
+            <div class='form-group col-sm-4'>
+                <input type="text" class="form-control" id="sign_act" value=""  autocomplete="off" disabled>
+            </div>
+            <div class='form-group col-sm-4'>
+            </div>
+        </div>
+        
+        
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class='form-group col-sm-2'>
+                <label for="sign_key" style="margin-top: 8px;">Private Key:</label>
+            </div>
+            <div class='form-group col-sm-4'>
+                <input type="password" class="form-control" id="sign_key" value=""  autocomplete="off">
+            </div>
+            <div class='form-group col-sm-4'>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class="col-sm-2">
+                <button style='display: inline; margin: 10px;' class='btn btn-warning' id='btn_issue_adjust'>ADJUST</button>
+            </div>
+            <div class="col-sm-2">
+                <button style='display: inline; margin: 10px;' class='btn btn-danger' id='btn_stop_adjust'>STOP</button>
+            </div>
+            <div class="col-sm-6">
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-sm-2">
+            </div>
+            <div class="col-sm-8">
+                <hr>
+                <p>&nbsp;</p>
+                <p>&nbsp;</p>
+                <p style="font-size: 12px; font-family: Tahoma;">Copyright - MIT License - 2021</p>
+            </div>
+            <div class="col-sm-2">
+            </div>
+        </div>
+    </div>
 </body>
 </html>
