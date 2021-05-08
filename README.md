@@ -1,2 +1,2 @@
-# eosiostakemanager
-Building out a CPU / NET delegated stake manager to reassign staking for large number of accounts.
+# telosstakemanager
+Presently operational stake manager with a 2 live net and 1 test net nodes operational.
