@@ -1,2 +1,2 @@
 # telosstakemanager
-Presently operational stake manager with a 2 live net and 1 test net nodes operational.
+Presently operational stake manager with API Live net and test net.
